@@ -17,18 +17,18 @@ public class LandDataEditor : Editor
 
     // Editor Tools State
     private bool editModeEnabled = false;
-    private EditorTool currentEditorTool = EditorTool.Brush;
+    private EditorTool currentEditorTool = EditorTool.SquareBrush; // Default to SquareBrush
     private BrushMode currentBrushMode = BrushMode.Fertility;
-    private float brushFertilityValue = 250f; // Default brush value to mid-range
+    private float brushFertilityValue = 50f; // Default brush value to mid-range (0-100)
     private CropType brushCropType;
-    private int brushSize = 1;
+    private int brushSize = 1; // For SquareBrush, this is side length; for CircleBrush, this is radius
 
     // For Box Selection
     private bool isDraggingBox = false;
     private Vector2Int boxSelectStartGlobalCoord; // Global tile coordinate
     private Vector2Int boxSelectEndGlobalCoord;   // Global tile coordinate
 
-    // For Lasso Selection (Placeholder - implementation in Phase 2/3)
+    // For Lasso Selection
     private bool isLassoing = false;
     private List<Vector2Int> lassoPointsGlobal = new List<Vector2Int>(); // Global tile coordinates for lasso points
 
@@ -37,8 +37,18 @@ public class LandDataEditor : Editor
     private Gradient fertilityColorGradient;
     private bool showEnvironmentalInfluenceViz = false; // New toggle for visualizing environmental influences
 
+    // EditorPrefs keys for persistence
+    private const string EDITOR_PREFS_EDIT_MODE_ENABLED = "LandDataEditor.EditModeEnabled";
+    private const string EDITOR_PREFS_CURRENT_TOOL = "LandDataEditor.CurrentTool";
+    private const string EDITOR_PREFS_BRUSH_MODE = "LandDataEditor.BrushMode";
+    private const string EDITOR_PREFS_BRUSH_FERTILITY_VALUE = "LandDataEditor.BrushFertilityValue";
+    private const string EDITOR_PREFS_BRUSH_SIZE = "LandDataEditor.BrushSize";
+    private const string EDITOR_PREFS_SHOW_FERTILITY_OVERLAY = "LandDataEditor.ShowFertilityOverlay";
+    private const string EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ = "LandDataEditor.ShowEnvironmentalInfluenceViz";
+
+
     // Enum for different interaction tools
-    private enum EditorTool { Brush, BoxSelect, LassoSelect }
+    private enum EditorTool { SquareBrush, CircleBrush, BoxSelect, LassoSelect } // Renamed Brush to SquareBrush, added CircleBrush
     // Enum for different brush modes (what the brush applies)
     private enum BrushMode { Fertility, CropType }
 
@@ -47,14 +57,24 @@ public class LandDataEditor : Editor
         landData = (LandData)target;
         landData.InitializeChunks(); // Call this unconditionally as it handles re-initialization safely.
 
+        // Load persisted editor state
+        editModeEnabled = EditorPrefs.GetBool(EDITOR_PREFS_EDIT_MODE_ENABLED, false);
+        currentEditorTool = (EditorTool)EditorPrefs.GetInt(EDITOR_PREFS_CURRENT_TOOL, (int)EditorTool.SquareBrush);
+        currentBrushMode = (BrushMode)EditorPrefs.GetInt(EDITOR_PREFS_BRUSH_MODE, (int)BrushMode.Fertility);
+        brushFertilityValue = EditorPrefs.GetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, 50f); // Default to 50 for 0-100 range
+        brushSize = EditorPrefs.GetInt(EDITOR_PREFS_BRUSH_SIZE, 1);
+        showFertilityOverlay = EditorPrefs.GetBool(EDITOR_PREFS_SHOW_FERTILITY_OVERLAY, false);
+        showEnvironmentalInfluenceViz = EditorPrefs.GetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, false);
+
+
         // Initialize the Gradient
         if (fertilityColorGradient == null)
         {
             fertilityColorGradient = new Gradient();
-            // Default gradient from red (low) to green (high) for 0-500 range
+            // Default gradient from red (low) to green (high) for 0-100 range
             GradientColorKey[] colorKeys = new GradientColorKey[2];
             colorKeys[0] = new GradientColorKey(Color.red, 0f);    // 0 fertility is red
-            colorKeys[1] = new GradientColorKey(Color.green, 1f);  // 500 fertility is green (normalized to 1.0)
+            colorKeys[1] = new GradientColorKey(Color.green, 1f);  // 100 fertility is green (normalized to 1.0)
 
             GradientAlphaKey[] alphaKeys = new GradientAlphaKey[2];
             alphaKeys[0] = new GradientAlphaKey(0.5f, 0f); // 50% opacity
@@ -70,6 +90,15 @@ public class LandDataEditor : Editor
     {
         // Unsubscribe to prevent memory leaks
         SceneView.duringSceneGui -= OnSceneGUI;
+
+        // Save editor state when disabled
+        EditorPrefs.SetBool(EDITOR_PREFS_EDIT_MODE_ENABLED, editModeEnabled);
+        EditorPrefs.SetInt(EDITOR_PREFS_CURRENT_TOOL, (int)currentEditorTool);
+        EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode);
+        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue);
+        EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_SIZE, brushSize);
+        EditorPrefs.SetBool(EDITOR_PREFS_SHOW_FERTILITY_OVERLAY, showFertilityOverlay);
+        EditorPrefs.SetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, showEnvironmentalInfluenceViz);
     }
 
     // Custom Inspector GUI for LandData asset
@@ -94,7 +123,12 @@ public class LandDataEditor : Editor
         EditorGUILayout.LabelField("Editor Interaction Tools", EditorStyles.boldLabel);
 
         // Toggle button to enable/disable Scene View interaction
-        editModeEnabled = GUILayout.Toggle(editModeEnabled, "Enable Editor Tools (Scene Interaction)", "Button");
+        bool newEditModeEnabled = GUILayout.Toggle(editModeEnabled, "Enable Editor Tools (Scene Interaction)", "Button");
+        if (newEditModeEnabled != editModeEnabled)
+        {
+            editModeEnabled = newEditModeEnabled;
+            EditorPrefs.SetBool(EDITOR_PREFS_EDIT_MODE_ENABLED, editModeEnabled); // Persist change immediately
+        }
 
         if (editModeEnabled)
         {
@@ -102,19 +136,73 @@ public class LandDataEditor : Editor
                                     "Ctrl + Left-click a chunk to expand it into a detailed grid.\n" +
                                     "Ctrl + Right-click an expanded chunk to collapse it.", MessageType.Info);
 
-            currentEditorTool = (EditorTool)EditorGUILayout.EnumPopup("Active Tool", currentEditorTool);
+            EditorTool newEditorTool = (EditorTool)EditorGUILayout.EnumPopup("Active Tool", currentEditorTool);
+            if (newEditorTool != currentEditorTool)
+            {
+                currentEditorTool = newEditorTool;
+                EditorPrefs.SetInt(EDITOR_PREFS_CURRENT_TOOL, (int)currentEditorTool); // Persist change
+            }
+
 
             // --- Tool-specific UI ---
-            if (currentEditorTool == EditorTool.Brush)
+            if (currentEditorTool == EditorTool.SquareBrush) // Renamed from EditorTool.Brush
             {
-                EditorGUILayout.HelpBox("Click and drag to apply brush. Brush size determines area.", MessageType.None);
-                currentBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
-                brushSize = EditorGUILayout.IntSlider("Brush Size", brushSize, 1, 5); // Brush size (in tiles)
+                EditorGUILayout.HelpBox("Click and drag to apply square brush. Brush size determines area.", MessageType.None);
+                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
+                if (newBrushMode != currentBrushMode)
+                {
+                    currentBrushMode = newBrushMode;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
+                }
+
+                int newBrushSize = EditorGUILayout.IntSlider("Brush Size", brushSize, 1, 5); // Brush size (in tiles)
+                if (newBrushSize != brushSize)
+                {
+                    brushSize = newBrushSize;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_SIZE, brushSize); // Persist change
+                }
+
 
                 if (currentBrushMode == BrushMode.Fertility)
                 {
-                    // Changed slider range to 0-500
-                    brushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 500f);
+                    // Changed slider range to 0-100
+                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
+                    if (newBrushFertilityValue != brushFertilityValue)
+                    {
+                        brushFertilityValue = newBrushFertilityValue;
+                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
+                    }
+                }
+                else if (currentBrushMode == BrushMode.CropType)
+                {
+                    brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
+                }
+            }
+            else if (currentEditorTool == EditorTool.CircleBrush) // New CircleBrush UI
+            {
+                EditorGUILayout.HelpBox("Click and drag to apply circular brush. Brush radius determines area.", MessageType.None);
+                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
+                if (newBrushMode != currentBrushMode)
+                {
+                    currentBrushMode = newBrushMode;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
+                }
+
+                int newBrushSize = EditorGUILayout.IntSlider("Brush Radius", brushSize, 1, 5); // Brush size (in tiles)
+                if (newBrushSize != brushSize)
+                {
+                    brushSize = newBrushSize;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_SIZE, brushSize); // Persist change
+                }
+
+                if (currentBrushMode == BrushMode.Fertility)
+                {
+                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
+                    if (newBrushFertilityValue != brushFertilityValue)
+                    {
+                        brushFertilityValue = newBrushFertilityValue;
+                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
+                    }
                 }
                 else if (currentBrushMode == BrushMode.CropType)
                 {
@@ -124,12 +212,22 @@ public class LandDataEditor : Editor
             else if (currentEditorTool == EditorTool.BoxSelect)
             {
                 EditorGUILayout.HelpBox("Click and drag to select a box area. Release to apply brush to the area.", MessageType.None);
-                currentBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
+                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
+                if (newBrushMode != currentBrushMode)
+                {
+                    currentBrushMode = newBrushMode;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
+                }
 
                 if (currentBrushMode == BrushMode.Fertility)
                 {
-                    // Changed slider range to 0-500
-                    brushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 500f);
+                    // Changed slider range to 0-100
+                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
+                    if (newBrushFertilityValue != brushFertilityValue)
+                    {
+                        brushFertilityValue = newBrushFertilityValue;
+                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
+                    }
                 }
                 else if (currentBrushMode == BrushMode.CropType)
                 {
@@ -138,7 +236,37 @@ public class LandDataEditor : Editor
             }
             else if (currentEditorTool == EditorTool.LassoSelect)
             {
-                EditorGUILayout.HelpBox("Click points to define a lasso path. Right-click to close and apply. (To be implemented in Phase 2/3)", MessageType.Warning);
+                EditorGUILayout.HelpBox("Click points to define a lasso path. Right-click or press Enter to close and apply.", MessageType.Info);
+                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
+                if (newBrushMode != currentBrushMode)
+                {
+                    currentBrushMode = newBrushMode;
+                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
+                }
+
+                if (currentBrushMode == BrushMode.Fertility)
+                {
+                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
+                    if (newBrushFertilityValue != brushFertilityValue)
+                    {
+                        brushFertilityValue = newBrushFertilityValue;
+                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
+                    }
+                }
+                else if (currentBrushMode == BrushMode.CropType)
+                {
+                    brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
+                }
+
+                if (isLassoing)
+                {
+                    EditorGUILayout.LabelField($"Lasso Points: {lassoPointsGlobal.Count}");
+                    if (GUILayout.Button("Clear Lasso Points"))
+                    {
+                        lassoPointsGlobal.Clear();
+                        isLassoing = false;
+                    }
+                }
             }
 
             if (GUILayout.Button("Save All Land Data Changes"))
@@ -158,14 +286,25 @@ public class LandDataEditor : Editor
         EditorGUILayout.LabelField("Overlay Options", EditorStyles.boldLabel);
 
         // Using GradientField for fertility colors
-        showFertilityOverlay = GUILayout.Toggle(showFertilityOverlay, "Show Fertility Overlay (Editor Only)");
+        bool newShowFertilityOverlay = GUILayout.Toggle(showFertilityOverlay, "Show Fertility Overlay (Editor Only)");
+        if (newShowFertilityOverlay != showFertilityOverlay)
+        {
+            showFertilityOverlay = newShowFertilityOverlay;
+            EditorPrefs.SetBool(EDITOR_PREFS_SHOW_FERTILITY_OVERLAY, showFertilityOverlay); // Persist change
+        }
+
         if (showFertilityOverlay)
         {
             fertilityColorGradient = EditorGUILayout.GradientField("Fertility Gradient", fertilityColorGradient);
         }
 
         // Environmental Influence Visualization Toggle
-        showEnvironmentalInfluenceViz = GUILayout.Toggle(showEnvironmentalInfluenceViz, "Show Environmental Influence Viz");
+        bool newShowEnvironmentalInfluenceViz = GUILayout.Toggle(showEnvironmentalInfluenceViz, "Show Environmental Influence Viz");
+        if (newShowEnvironmentalInfluenceViz != showEnvironmentalInfluenceViz)
+        {
+            showEnvironmentalInfluenceViz = newShowEnvironmentalInfluenceViz;
+            EditorPrefs.SetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, showEnvironmentalInfluenceViz); // Persist change
+        }
 
         // NEW: Button to apply environmental influences
         EditorGUILayout.Space(5);
@@ -265,9 +404,13 @@ public class LandDataEditor : Editor
                 // If the chunk is expanded, pass interaction to tool handlers
                 else if (hoveredChunk.isExpandedInEditor)
                 {
-                    if (currentEditorTool == EditorTool.Brush)
+                    if (currentEditorTool == EditorTool.SquareBrush) // Updated name
                     {
-                        HandleBrushTool(current, mouseOverGround && hoveredTileData != null);
+                        HandleSquareBrushTool(current, mouseOverGround && hoveredTileData != null);
+                    }
+                    else if (currentEditorTool == EditorTool.CircleBrush) // New CircleBrush handler
+                    {
+                        HandleCircleBrushTool(current, mouseOverGround && hoveredTileData != null);
                     }
                     else if (currentEditorTool == EditorTool.BoxSelect)
                     {
@@ -305,21 +448,41 @@ public class LandDataEditor : Editor
 
     // --- Tool Handling Methods ---
 
-    private void HandleBrushTool(Event current, bool mouseOverTile)
+    private void HandleSquareBrushTool(Event current, bool mouseOverTile) // Renamed from HandleBrushTool
     {
         if (!mouseOverTile) return; // Must be over an active tile in an expanded chunk
 
         if (current.type == EventType.MouseDown && current.button == 0)
         {
             // Apply brush on initial click
-            ApplyBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
+            ApplySquareBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
             landData.NotifyLandDataChanged(); // Notify after changes
             current.Use();
         }
         else if (current.type == EventType.MouseDrag && current.button == 0)
         {
             // Apply brush while dragging
-            ApplyBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
+            ApplySquareBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
+            landData.NotifyLandDataChanged(); // Notify after changes
+            current.Use();
+        }
+    }
+
+    private void HandleCircleBrushTool(Event current, bool mouseOverTile) // New CircleBrush handler
+    {
+        if (!mouseOverTile) return; // Must be over an active tile in an expanded chunk
+
+        if (current.type == EventType.MouseDown && current.button == 0)
+        {
+            // Apply brush on initial click
+            ApplyCircleBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
+            landData.NotifyLandDataChanged(); // Notify after changes
+            current.Use();
+        }
+        else if (current.type == EventType.MouseDrag && current.button == 0)
+        {
+            // Apply brush while dragging
+            ApplyCircleBrushToArea(hoveredChunk, hoveredInternalTileCoord.x, hoveredInternalTileCoord.y, brushSize);
             landData.NotifyLandDataChanged(); // Notify after changes
             current.Use();
         }
@@ -365,22 +528,33 @@ public class LandDataEditor : Editor
             hoveredChunk.GetLocalTileWorldPosition(hoveredInternalTileCoord.x, hoveredInternalTileCoord.y)
         );
 
-        if (current.type == EventType.MouseDown && current.button == 0)
+        if (current.type == EventType.MouseDown && current.button == 0) // Left click to add points
         {
             if (!isLassoing)
             {
                 lassoPointsGlobal.Clear();
                 isLassoing = true;
             }
-            lassoPointsGlobal.Add(globalCoord);
+            if (!lassoPointsGlobal.Contains(globalCoord)) // Avoid duplicate points if clicking same tile
+            {
+                lassoPointsGlobal.Add(globalCoord);
+            }
             current.Use();
         }
-        else if (current.type == EventType.MouseDown && current.button == 1 && isLassoing) // Right click to finish lasso
+        else if (isLassoing && (current.type == EventType.MouseDown && current.button == 1 || // Right click to finish
+                                current.type == EventType.KeyDown && current.keyCode == KeyCode.Return)) // Enter key to finish
         {
-            isLassoing = false;
-            // TODO: Implement ApplyBrushToLasso(lassoPointsGlobal);
-            Debug.LogWarning("Lasso selection applied (placeholder). Need to implement Point-in-Polygon check on global tiles.");
+            if (lassoPointsGlobal.Count >= 3) // Need at least 3 points to form a polygon
+            {
+                ApplyBrushToLasso(lassoPointsGlobal);
+                Debug.Log("Lasso selection applied.");
+            }
+            else
+            {
+                Debug.LogWarning("Lasso selection requires at least 3 points. Clearing points.");
+            }
             lassoPointsGlobal.Clear(); // Clear points after applying/finishing
+            isLassoing = false;
             landData.NotifyLandDataChanged(); // Notify after changes
             current.Use();
         }
@@ -488,7 +662,7 @@ public class LandDataEditor : Editor
         }
 
         // Draw brush preview
-        if (currentEditorTool == EditorTool.Brush && hoveredTileData != null && hoveredChunk != null && hoveredChunk.isExpandedInEditor)
+        if ((currentEditorTool == EditorTool.SquareBrush || currentEditorTool == EditorTool.CircleBrush) && hoveredTileData != null && hoveredChunk != null && hoveredChunk.isExpandedInEditor)
         {
             int halfBrush = brushSize / 2;
             for (int y = -halfBrush; y <= halfBrush; y++)
@@ -499,6 +673,14 @@ public class LandDataEditor : Editor
                     if (currentInternalCoord.x >= 0 && currentInternalCoord.x < hoveredChunk.internalGridSize.x &&
                         currentInternalCoord.y >= 0 && currentInternalCoord.y < hoveredChunk.internalGridSize.y)
                     {
+                        // Check for circular brush
+                        if (currentEditorTool == EditorTool.CircleBrush)
+                        {
+                            // Distance from center of brush to current tile center
+                            float dist = Vector2.Distance(hoveredInternalTileCoord, currentInternalCoord);
+                            if (dist > brushSize - 0.5f) continue; // Only draw if within radius (with a small buffer)
+                        }
+
                         Vector3 tileWorldPos = landData.ChunkCoordToWorldOrigin(hoveredChunkCoord.x, hoveredChunkCoord.y) +
                                                hoveredChunk.GetLocalTileWorldPosition(currentInternalCoord.x, currentInternalCoord.y);
 
@@ -589,8 +771,8 @@ public class LandDataEditor : Editor
                             CropTileData tile = chunk.GetTileData(x, y);
                             if (tile == null) continue;
 
-                            // Use the gradient to get the color based on fertility (normalized 0-500)
-                            Color fertilityColor = fertilityColorGradient.Evaluate(tile.fertility / 500f);
+                            // Use the gradient to get the color based on fertility (normalized 0-100)
+                            Color fertilityColor = fertilityColorGradient.Evaluate(tile.fertility / 100f);
                             Vector3 tileWorldPos = chunkWorldOrigin + chunk.GetLocalTileWorldPosition(x, y);
                             Handles.DrawSolidRectangleWithOutline(GetTileRectVertices(tileWorldPos, chunk.tileSize), fertilityColor, Color.clear);
                         }
@@ -610,11 +792,11 @@ public class LandDataEditor : Editor
                     }
                     else
                     {
-                        totalFertility = 250f; // Default if chunk is empty/uninitialized, mid-range
+                        totalFertility = 50f; // Default if chunk is empty/uninitialized, mid-range
                     }
 
-                    // Normalize for the gradient (0-500 range)
-                    Color fertilityColor = fertilityColorGradient.Evaluate(totalFertility / 500f);
+                    // Normalize for the gradient (0-100 range)
+                    Color fertilityColor = fertilityColorGradient.Evaluate(totalFertility / 100f);
                     fertilityColor.a = 0.3f; // Slightly more transparent for chunks when collapsed
                     Handles.DrawSolidRectangleWithOutline(GetChunkRectVertices(chunkX, chunkY), fertilityColor, Color.clear);
                 }
@@ -815,8 +997,8 @@ public class LandDataEditor : Editor
                             // Record undo for the chunk before modifying
                             Undo.RecordObject(targetChunk, "Apply Environmental Influence");
 
-                            // Apply the calculated change, clamping between 0 and 500
-                            tile.fertility = Mathf.Clamp(tile.fertility + totalCalculatedChange, 0f, 500f);
+                            // Apply the calculated change, clamping between 0 and 100
+                            tile.fertility = Mathf.Clamp(tile.fertility + totalCalculatedChange, 0f, 100f);
                             EditorUtility.SetDirty(targetChunk); // Mark the chunk dirty
                         }
                     }
@@ -938,8 +1120,8 @@ public class LandDataEditor : Editor
 
         if (currentBrushMode == BrushMode.Fertility)
         {
-            // Clamp fertility to 0-500
-            tile.fertility = Mathf.Clamp(brushFertilityValue, 0f, 500f);
+            // Clamp fertility to 0-100
+            tile.fertility = Mathf.Clamp(brushFertilityValue, 0f, 100f);
         }
         else if (currentBrushMode == BrushMode.CropType)
         {
@@ -949,8 +1131,8 @@ public class LandDataEditor : Editor
                 tile.currentGrowthStage = 0;
                 tile.growthProgress = 0f;
                 tile.state = TileState.Sown;
-                // Example: Impact fertility when planting (clamped to 0-500)
-                tile.fertility = Mathf.Clamp(tile.fertility + brushCropType.fertilityImpact, 0f, 500f);
+                // Example: Impact fertility when planting (clamped to 0-100)
+                tile.fertility = Mathf.Clamp(tile.fertility + brushCropType.fertilityImpact, 0f, 100f);
             }
             else // If brushCropType is null, clear the tile
             {
@@ -964,9 +1146,9 @@ public class LandDataEditor : Editor
     }
 
     /// <summary>
-    /// Applies the brush in a square area around a center internal coordinate within a chunk.
+    /// Applies the square brush in a square area around a center internal coordinate within a chunk.
     /// </summary>
-    private void ApplyBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int size)
+    private void ApplySquareBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int size) // Renamed from ApplyBrushToArea
     {
         if (targetChunk == null) return;
 
@@ -988,6 +1170,36 @@ public class LandDataEditor : Editor
             }
         }
     }
+
+    /// <summary>
+    /// Applies the circular brush in a circular area around a center internal coordinate within a chunk.
+    /// </summary>
+    private void ApplyCircleBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int radius) // New CircleBrush apply method
+    {
+        if (targetChunk == null) return;
+
+        // Iterate through a square bounding box around the circle
+        for (int yOffset = -radius; yOffset <= radius; yOffset++)
+        {
+            for (int xOffset = -radius; xOffset <= radius; xOffset++)
+            {
+                Vector2Int currentInternalCoord = new Vector2Int(internalCenterX + xOffset, internalCenterY + yOffset);
+
+                // Check if the tile is within the circular radius
+                float dist = Vector2.Distance(new Vector2(internalCenterX, internalCenterY), currentInternalCoord);
+                if (dist <= radius + 0.5f) // Add 0.5f buffer for tile centers
+                {
+                    // Ensure internal coordinates are within chunk bounds
+                    if (currentInternalCoord.x >= 0 && currentInternalCoord.x < targetChunk.internalGridSize.x &&
+                        currentInternalCoord.y >= 0 && currentInternalCoord.y < targetChunk.internalGridSize.y)
+                    {
+                        ApplyBrushToSingleTile(targetChunk, currentInternalCoord.x, currentInternalCoord.y);
+                    }
+                }
+            }
+        }
+    }
+
 
     /// <summary>
     /// Applies the brush to all tiles within a global box selection.
@@ -1027,7 +1239,110 @@ public class LandDataEditor : Editor
         }
     }
 
-    // private void ApplyBrushToLasso(List<Vector2Int> lassoPointsGlobal) { /* TODO: Phase 2/3 */ }
+    /// <summary>
+    /// Applies the brush to all tiles within the global lasso selection.
+    /// </summary>
+    private void ApplyBrushToLasso(List<Vector2Int> lassoPointsGlobal)
+    {
+        if (lassoPointsGlobal.Count < 3) return; // Not a valid polygon
+
+        // Convert global tile coordinates to Vector2 for point-in-polygon check
+        Vector2[] polygon = lassoPointsGlobal.Select(p => new Vector2(p.x, p.y)).ToArray();
+
+        // Determine bounding box of the lasso to limit iteration
+        int minX = int.MaxValue, maxX = int.MinValue, minY = int.MaxValue, maxY = int.MinValue;
+        foreach (Vector2Int p in lassoPointsGlobal)
+        {
+            minX = Mathf.Min(minX, p.x);
+            maxX = Mathf.Max(maxX, p.x);
+            minY = Mathf.Min(minY, p.y);
+            maxY = Mathf.Max(maxY, p.y);
+        }
+
+        // Expand bounding box slightly to ensure tiles on edges are considered
+        minX -= 1; maxX += 1;
+        minY -= 1; maxY += 1;
+
+        // Iterate through all global tile coordinates within the bounding box
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                Vector2Int currentGlobalTile = new Vector2Int(x, y);
+                // Use the tile's global coordinate as the point for the polygon check
+                Vector2 pointToCheck = new Vector2(currentGlobalTile.x, currentGlobalTile.y);
+
+                if (IsPointInPolygon(polygon, pointToCheck))
+                {
+                    // Determine which chunk and internal tile this global coordinate corresponds to
+                    Vector2Int internalChunkSize = landData.GetDefaultInternalChunkSize();
+
+                    int chunkX = currentGlobalTile.x / internalChunkSize.x;
+                    int chunkY = currentGlobalTile.y / internalChunkSize.y;
+
+                    LandDataChunk targetChunk = landData.GetChunk(chunkX, chunkY);
+
+                    if (targetChunk != null)
+                    {
+                        Vector2Int internalTileCoord = new Vector2Int(
+                            currentGlobalTile.x % internalChunkSize.x,
+                            currentGlobalTile.y % internalChunkSize.y
+                        );
+                        ApplyBrushToSingleTile(targetChunk, internalTileCoord.x, internalTileCoord.y);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks if a point is inside a polygon using the ray casting algorithm.
+    /// </summary>
+    /// <param name="polygon">The polygon vertices in order (e.g., global tile coordinates as Vector2).</param>
+    /// <param name="point">The point to check (e.g., global tile coordinate as Vector2).</param>
+    /// <returns>True if the point is inside the polygon, false otherwise.</returns>
+    private bool IsPointInPolygon(Vector2[] polygon, Vector2 point)
+    {
+        int intersections = 0;
+        for (int i = 0; i < polygon.Length; i++)
+        {
+            Vector2 p1 = polygon[i];
+            Vector2 p2 = polygon[(i + 1) % polygon.Length]; // Next point, wraps around for the last segment
+
+            // Check if the ray from 'point' (horizontally to the right) intersects the segment (p1, p2)
+            // A point is on the edge if it's collinear and within the segment's bounds
+            if (IsPointOnSegment(p1, p2, point))
+            {
+                return true; // Point is on an edge, consider it inside
+            }
+
+            // Check if the segment crosses the horizontal ray extending from 'point'
+            if (((p1.y <= point.y && p2.y > point.y) || (p1.y > point.y && p2.y <= point.y)) &&
+                (point.x < (p2.x - p1.x) * (point.y - p1.y) / (p2.y - p1.y) + p1.x))
+            {
+                intersections++;
+            }
+        }
+        // If the number of intersections is odd, the point is inside
+        return (intersections % 2 == 1);
+    }
+
+    /// <summary>
+    /// Checks if a point lies on a line segment.
+    /// </summary>
+    private bool IsPointOnSegment(Vector2 p1, Vector2 p2, Vector2 point)
+    {
+        float crossProduct = (point.y - p1.y) * (p2.x - p1.x) - (point.x - p1.x) * (p2.y - p1.y);
+
+        // If cross product is non-zero, points are not collinear
+        if (Mathf.Abs(crossProduct) > Mathf.Epsilon) return false;
+
+        // Check if point is within the bounding box of the segment
+        bool inX = (point.x >= Mathf.Min(p1.x, p2.x) && point.x <= Mathf.Max(p1.x, p2.x));
+        bool inY = (point.y >= Mathf.Min(p1.y, p2.y) && point.y <= Mathf.Max(p1.y, p2.y));
+
+        return inX && inY;
+    }
 
 
     // --- Helper for generating rectangle vertices for Handles.DrawSolidRectangleWithOutline ---
