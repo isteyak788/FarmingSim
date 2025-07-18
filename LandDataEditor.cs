@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq; // Required for .FirstOrDefault() and .OrderBy()
+using System; // Required for Math.Abs
 
 [CustomEditor(typeof(LandData))]
 public class LandDataEditor : Editor
@@ -36,6 +37,12 @@ public class LandDataEditor : Editor
     private bool showFertilityOverlay = false;
     private Gradient fertilityColorGradient;
     private bool showEnvironmentalInfluenceViz = false; // New toggle for visualizing environmental influences
+    private bool showSoilTypeOverlay = false; // NEW: Toggle for Soil Type Overlay
+
+    // NEW: Soil Type specific fields
+    private SoilType selectedSoilType;
+    private List<SoilType> allSoilTypes = new List<SoilType>();
+
 
     // EditorPrefs keys for persistence
     private const string EDITOR_PREFS_EDIT_MODE_ENABLED = "LandDataEditor.EditModeEnabled";
@@ -45,12 +52,14 @@ public class LandDataEditor : Editor
     private const string EDITOR_PREFS_BRUSH_SIZE = "LandDataEditor.BrushSize";
     private const string EDITOR_PREFS_SHOW_FERTILITY_OVERLAY = "LandDataEditor.ShowFertilityOverlay";
     private const string EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ = "LandDataEditor.ShowEnvironmentalInfluenceViz";
+    private const string EDITOR_PREFS_SHOW_SOIL_TYPE_OVERLAY = "LandDataEditor.ShowSoilTypeOverlay"; // NEW
+    private const string EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID = "LandDataEditor.SelectedSoilTypeGUID"; // NEW
 
 
     // Enum for different interaction tools
-    private enum EditorTool { SquareBrush, CircleBrush, BoxSelect, LassoSelect } // Renamed Brush to SquareBrush, added CircleBrush
+    private enum EditorTool { SquareBrush, CircleBrush, BoxSelect, LassoSelect }
     // Enum for different brush modes (what the brush applies)
-    private enum BrushMode { Fertility, CropType }
+    private enum BrushMode { Fertility, CropType, SoilType } // NEW: Added SoilType
 
     private void OnEnable()
     {
@@ -65,7 +74,7 @@ public class LandDataEditor : Editor
         brushSize = EditorPrefs.GetInt(EDITOR_PREFS_BRUSH_SIZE, 1);
         showFertilityOverlay = EditorPrefs.GetBool(EDITOR_PREFS_SHOW_FERTILITY_OVERLAY, false);
         showEnvironmentalInfluenceViz = EditorPrefs.GetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, false);
-
+        showSoilTypeOverlay = EditorPrefs.GetBool(EDITOR_PREFS_SHOW_SOIL_TYPE_OVERLAY, false); // NEW
 
         // Initialize the Gradient
         if (fertilityColorGradient == null)
@@ -80,6 +89,15 @@ public class LandDataEditor : Editor
             alphaKeys[0] = new GradientAlphaKey(0.5f, 0f); // 50% opacity
             alphaKeys[1] = new GradientAlphaKey(0.5f, 1f); // 50% opacity
             fertilityColorGradient.SetKeys(colorKeys, alphaKeys);
+        }
+
+        // NEW: Load all SoilType ScriptableObjects and selected SoilType
+        LoadAllSoilTypes();
+        string selectedSoilTypeGuid = EditorPrefs.GetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, string.Empty);
+        if (!string.IsNullOrEmpty(selectedSoilTypeGuid))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(selectedSoilTypeGuid);
+            selectedSoilType = AssetDatabase.LoadAssetAtPath<SoilType>(path);
         }
 
         // Subscribe to SceneView rendering events
@@ -99,6 +117,35 @@ public class LandDataEditor : Editor
         EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_SIZE, brushSize);
         EditorPrefs.SetBool(EDITOR_PREFS_SHOW_FERTILITY_OVERLAY, showFertilityOverlay);
         EditorPrefs.SetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, showEnvironmentalInfluenceViz);
+        EditorPrefs.SetBool(EDITOR_PREFS_SHOW_SOIL_TYPE_OVERLAY, showSoilTypeOverlay); // NEW
+
+        // NEW: Save selected SoilType by GUID
+        if (selectedSoilType != null)
+        {
+            EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(selectedSoilType)));
+        }
+        else
+        {
+            EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, string.Empty);
+        }
+    }
+
+    // Helper to load all SoilType assets
+    private void LoadAllSoilTypes()
+    {
+        string[] guids = AssetDatabase.FindAssets("t:SoilType");
+        allSoilTypes.Clear();
+        foreach (string guid in guids)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            SoilType soil = AssetDatabase.LoadAssetAtPath<SoilType>(path);
+            if (soil != null)
+            {
+                allSoilTypes.Add(soil);
+            }
+        }
+        // Sort for consistent display in the dropdown
+        allSoilTypes = allSoilTypes.OrderBy(s => s.soilTypeName).ToList();
     }
 
     // Custom Inspector GUI for LandData asset
@@ -145,9 +192,9 @@ public class LandDataEditor : Editor
 
 
             // --- Tool-specific UI ---
-            if (currentEditorTool == EditorTool.SquareBrush) // Renamed from EditorTool.Brush
+            if (currentEditorTool == EditorTool.SquareBrush || currentEditorTool == EditorTool.CircleBrush)
             {
-                EditorGUILayout.HelpBox("Click and drag to apply square brush. Brush size determines area.", MessageType.None);
+                EditorGUILayout.HelpBox("Click and drag to apply brush. Brush size/radius determines area.", MessageType.None);
                 BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
                 if (newBrushMode != currentBrushMode)
                 {
@@ -155,40 +202,7 @@ public class LandDataEditor : Editor
                     EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
                 }
 
-                int newBrushSize = EditorGUILayout.IntSlider("Brush Size", brushSize, 1, 5); // Brush size (in tiles)
-                if (newBrushSize != brushSize)
-                {
-                    brushSize = newBrushSize;
-                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_SIZE, brushSize); // Persist change
-                }
-
-
-                if (currentBrushMode == BrushMode.Fertility)
-                {
-                    // Changed slider range to 0-100
-                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
-                    if (newBrushFertilityValue != brushFertilityValue)
-                    {
-                        brushFertilityValue = newBrushFertilityValue;
-                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
-                    }
-                }
-                else if (currentBrushMode == BrushMode.CropType)
-                {
-                    brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
-                }
-            }
-            else if (currentEditorTool == EditorTool.CircleBrush) // New CircleBrush UI
-            {
-                EditorGUILayout.HelpBox("Click and drag to apply circular brush. Brush radius determines area.", MessageType.None);
-                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
-                if (newBrushMode != currentBrushMode)
-                {
-                    currentBrushMode = newBrushMode;
-                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
-                }
-
-                int newBrushSize = EditorGUILayout.IntSlider("Brush Radius", brushSize, 1, 5); // Brush size (in tiles)
+                int newBrushSize = EditorGUILayout.IntSlider(currentEditorTool == EditorTool.SquareBrush ? "Brush Size" : "Brush Radius", brushSize, 1, 5); // Brush size (in tiles)
                 if (newBrushSize != brushSize)
                 {
                     brushSize = newBrushSize;
@@ -208,10 +222,41 @@ public class LandDataEditor : Editor
                 {
                     brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
                 }
+                // NEW: SoilType brush mode UI
+                else if (currentBrushMode == BrushMode.SoilType)
+                {
+                    // Ensure allSoilTypes is up-to-date
+                    LoadAllSoilTypes();
+
+                    string[] soilTypeNames = allSoilTypes.Select(s => s.soilTypeName).ToArray();
+                    int currentIndex = -1;
+                    if (selectedSoilType != null)
+                    {
+                        currentIndex = allSoilTypes.IndexOf(selectedSoilType);
+                    }
+
+                    int newIndex = EditorGUILayout.Popup("Select Soil Type", currentIndex, soilTypeNames);
+
+                    if (newIndex >= 0 && newIndex < allSoilTypes.Count)
+                    {
+                        SoilType newSelectedSoilType = allSoilTypes[newIndex];
+                        if (newSelectedSoilType != selectedSoilType)
+                        {
+                            selectedSoilType = newSelectedSoilType;
+                            // Save GUID immediately
+                            EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(selectedSoilType)));
+                        }
+                    }
+                    else if (newIndex == -1 && selectedSoilType != null) // If current selection is valid but not in dropdown (e.g. deleted asset)
+                    {
+                        selectedSoilType = null;
+                        EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, string.Empty);
+                    }
+                }
             }
-            else if (currentEditorTool == EditorTool.BoxSelect)
+            else if (currentEditorTool == EditorTool.BoxSelect || currentEditorTool == EditorTool.LassoSelect)
             {
-                EditorGUILayout.HelpBox("Click and drag to select a box area. Release to apply brush to the area.", MessageType.None);
+                EditorGUILayout.HelpBox("Select an area to apply brush. Release to apply.", MessageType.None);
                 BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
                 if (newBrushMode != currentBrushMode)
                 {
@@ -221,7 +266,6 @@ public class LandDataEditor : Editor
 
                 if (currentBrushMode == BrushMode.Fertility)
                 {
-                    // Changed slider range to 0-100
                     float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
                     if (newBrushFertilityValue != brushFertilityValue)
                     {
@@ -233,32 +277,37 @@ public class LandDataEditor : Editor
                 {
                     brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
                 }
-            }
-            else if (currentEditorTool == EditorTool.LassoSelect)
-            {
-                EditorGUILayout.HelpBox("Click points to define a lasso path. Right-click or press Enter to close and apply.", MessageType.Info);
-                BrushMode newBrushMode = (BrushMode)EditorGUILayout.EnumPopup("Brush Mode", currentBrushMode);
-                if (newBrushMode != currentBrushMode)
+                // NEW: SoilType brush mode UI for selection tools
+                else if (currentBrushMode == BrushMode.SoilType)
                 {
-                    currentBrushMode = newBrushMode;
-                    EditorPrefs.SetInt(EDITOR_PREFS_BRUSH_MODE, (int)currentBrushMode); // Persist change
-                }
+                    LoadAllSoilTypes(); // Ensure list is fresh
 
-                if (currentBrushMode == BrushMode.Fertility)
-                {
-                    float newBrushFertilityValue = EditorGUILayout.Slider("Brush Fertility", brushFertilityValue, 0f, 100f);
-                    if (newBrushFertilityValue != brushFertilityValue)
+                    string[] soilTypeNames = allSoilTypes.Select(s => s.soilTypeName).ToArray();
+                    int currentIndex = -1;
+                    if (selectedSoilType != null)
                     {
-                        brushFertilityValue = newBrushFertilityValue;
-                        EditorPrefs.SetFloat(EDITOR_PREFS_BRUSH_FERTILITY_VALUE, brushFertilityValue); // Persist change
+                        currentIndex = allSoilTypes.IndexOf(selectedSoilType);
+                    }
+
+                    int newIndex = EditorGUILayout.Popup("Select Soil Type", currentIndex, soilTypeNames);
+
+                    if (newIndex >= 0 && newIndex < allSoilTypes.Count)
+                    {
+                        SoilType newSelectedSoilType = allSoilTypes[newIndex];
+                        if (newSelectedSoilType != selectedSoilType)
+                        {
+                            selectedSoilType = newSelectedSoilType;
+                            EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(selectedSoilType)));
+                        }
+                    }
+                    else if (newIndex == -1 && selectedSoilType != null)
+                    {
+                        selectedSoilType = null;
+                        EditorPrefs.SetString(EDITOR_PREFS_SELECTED_SOIL_TYPE_GUID, string.Empty);
                     }
                 }
-                else if (currentBrushMode == BrushMode.CropType)
-                {
-                    brushCropType = (CropType)EditorGUILayout.ObjectField("Brush Crop Type", brushCropType, typeof(CropType), false);
-                }
 
-                if (isLassoing)
+                if (currentEditorTool == EditorTool.LassoSelect && isLassoing)
                 {
                     EditorGUILayout.LabelField($"Lasso Points: {lassoPointsGlobal.Count}");
                     if (GUILayout.Button("Clear Lasso Points"))
@@ -304,6 +353,14 @@ public class LandDataEditor : Editor
         {
             showEnvironmentalInfluenceViz = newShowEnvironmentalInfluenceViz;
             EditorPrefs.SetBool(EDITOR_PREFS_SHOW_ENVIRONMENTAL_INFLUENCE_VIZ, showEnvironmentalInfluenceViz); // Persist change
+        }
+
+        // NEW: Soil Type Overlay Toggle
+        bool newShowSoilTypeOverlay = GUILayout.Toggle(showSoilTypeOverlay, "Show Soil Type Overlay (Editor Only)");
+        if (newShowSoilTypeOverlay != showSoilTypeOverlay)
+        {
+            showSoilTypeOverlay = newShowSoilTypeOverlay;
+            EditorPrefs.SetBool(EDITOR_PREFS_SHOW_SOIL_TYPE_OVERLAY, showSoilTypeOverlay); // Persist change
         }
 
         // NEW: Button to apply environmental influences
@@ -404,11 +461,11 @@ public class LandDataEditor : Editor
                 // If the chunk is expanded, pass interaction to tool handlers
                 else if (hoveredChunk.isExpandedInEditor)
                 {
-                    if (currentEditorTool == EditorTool.SquareBrush) // Updated name
+                    if (currentEditorTool == EditorTool.SquareBrush)
                     {
                         HandleSquareBrushTool(current, mouseOverGround && hoveredTileData != null);
                     }
-                    else if (currentEditorTool == EditorTool.CircleBrush) // New CircleBrush handler
+                    else if (currentEditorTool == EditorTool.CircleBrush)
                     {
                         HandleCircleBrushTool(current, mouseOverGround && hoveredTileData != null);
                     }
@@ -441,6 +498,11 @@ public class LandDataEditor : Editor
         {
             DrawEnvironmentalInfluenceVisuals();
         }
+        // NEW: Draw Soil Type Overlay
+        if (showSoilTypeOverlay)
+        {
+            DrawSoilTypeOverlay();
+        }
 
         // Request repaint for continuous drawing updates
         SceneView.RepaintAll();
@@ -448,7 +510,7 @@ public class LandDataEditor : Editor
 
     // --- Tool Handling Methods ---
 
-    private void HandleSquareBrushTool(Event current, bool mouseOverTile) // Renamed from HandleBrushTool
+    private void HandleSquareBrushTool(Event current, bool mouseOverTile)
     {
         if (!mouseOverTile) return; // Must be over an active tile in an expanded chunk
 
@@ -468,7 +530,7 @@ public class LandDataEditor : Editor
         }
     }
 
-    private void HandleCircleBrushTool(Event current, bool mouseOverTile) // New CircleBrush handler
+    private void HandleCircleBrushTool(Event current, bool mouseOverTile)
     {
         if (!mouseOverTile) return; // Must be over an active tile in an expanded chunk
 
@@ -657,7 +719,9 @@ public class LandDataEditor : Editor
             Vector3 tileWorldPos = landData.ChunkCoordToWorldOrigin(hoveredChunkCoord.x, hoveredChunkCoord.y) +
                                    hoveredChunk.GetLocalTileWorldPosition(hoveredInternalTileCoord.x, hoveredInternalTileCoord.y);
 
-            string infoText = $"Chunk:{hoveredChunkCoord.x},{hoveredChunkCoord.y}\nTile:{hoveredInternalTileCoord.x},{hoveredInternalTileCoord.y}\nFertility: {hoveredTileData.fertility:F1}%\nCrop: {(hoveredTileData.currentCrop != null ? hoveredTileData.currentCrop.cropName : "None")}\nState: {hoveredTileData.state}";
+            // NEW: Include Soil Type in info text
+            string soilTypeName = hoveredTileData.currentSoilType != null ? hoveredTileData.currentSoilType.soilTypeName : "None";
+            string infoText = $"Chunk:{hoveredChunkCoord.x},{hoveredChunkCoord.y}\nTile:{hoveredInternalTileCoord.x},{hoveredInternalTileCoord.y}\nFertility: {hoveredTileData.fertility:F1}%\nCrop: {(hoveredTileData.currentCrop != null ? hoveredTileData.currentCrop.cropName : "None")}\nSoil: {soilTypeName}\nState: {hoveredTileData.state}";
             Handles.Label(tileWorldPos + Vector3.up * 0.1f, infoText, textStyle);
         }
 
@@ -803,6 +867,69 @@ public class LandDataEditor : Editor
             }
         }
     }
+
+    // NEW: Draw Soil Type Overlay
+    private void DrawSoilTypeOverlay()
+    {
+        for (int chunkY = 0; chunkY < landData.chunkGridSize.y; chunkY++)
+        {
+            for (int chunkX = 0; chunkX < landData.chunkGridSize.x; chunkX++)
+            {
+                LandDataChunk chunk = landData.GetChunk(chunkX, chunkY);
+                if (chunk == null) continue;
+
+                if (chunk.isExpandedInEditor)
+                {
+                    Vector3 chunkWorldOrigin = landData.ChunkCoordToWorldOrigin(chunkX, chunkY);
+                    for (int y = 0; y < chunk.internalGridSize.y; y++)
+                    {
+                        for (int x = 0; x < chunk.internalGridSize.x; x++)
+                        {
+                            CropTileData tile = chunk.GetTileData(x, y);
+                            if (tile == null) continue;
+
+                            Color soilColor = tile.currentSoilType != null ? tile.currentSoilType.displayColor : Color.grey; // Default to grey if no soil type
+                            soilColor.a = 0.5f; // Semi-transparent for overlay
+                            Vector3 tileWorldPos = chunkWorldOrigin + chunk.GetLocalTileWorldPosition(x, y);
+                            Handles.DrawSolidRectangleWithOutline(GetTileRectVertices(tileWorldPos, chunk.tileSize), soilColor, Color.clear);
+                        }
+                    }
+                }
+                else // Draw a single color for the whole collapsed chunk based on the most common soil type
+                {
+                    Color chunkSoilColor = Color.grey; // Default if no tiles or no common soil
+                    if (chunk.tilesData != null && chunk.tilesData.Count > 0)
+                    {
+                        // Calculate the most common soil type in the chunk for a representative color
+                        var soilTypeCounts = new Dictionary<SoilType, int>();
+                        foreach (var tile in chunk.tilesData)
+                        {
+                            if (tile.currentSoilType != null)
+                            {
+                                if (soilTypeCounts.ContainsKey(tile.currentSoilType))
+                                {
+                                    soilTypeCounts[tile.currentSoilType]++;
+                                }
+                                else
+                                {
+                                    soilTypeCounts[tile.currentSoilType] = 1;
+                                }
+                            }
+                        }
+
+                        if (soilTypeCounts.Any())
+                        {
+                            SoilType mostCommonSoil = soilTypeCounts.OrderByDescending(pair => pair.Value).First().Key;
+                            chunkSoilColor = mostCommonSoil.displayColor;
+                        }
+                    }
+                    chunkSoilColor.a = 0.3f; // Slightly more transparent for chunks when collapsed
+                    Handles.DrawSolidRectangleWithOutline(GetChunkRectVertices(chunkX, chunkY), chunkSoilColor, Color.clear);
+                }
+            }
+        }
+    }
+
 
     // Draw Environmental Influence Visuals
     private void DrawEnvironmentalInfluenceVisuals()
@@ -1042,7 +1169,6 @@ public class LandDataEditor : Editor
         // --- Debugging Logs (can be commented out once confirmed working) ---
         // Debug.Log($"[Footprint Debug] Object: {obj.name}");
         // Debug.Log($"[Footprint Debug] Transform Position: {obj.transform.position}");
-        // Debug.Log($"[Footprint Debug] Transform Scale: {obj.transform.localScale}");
         // Debug.Log($"[Footprint Debug] Object Bounds (World): Center={objectBounds.center}, Size={objectBounds.size}");
 
         // Convert world bounds min/max to global tile coordinates
@@ -1142,13 +1268,36 @@ public class LandDataEditor : Editor
                 tile.state = TileState.Unprepared;
             }
         }
+        // NEW: Apply SoilType
+        else if (currentBrushMode == BrushMode.SoilType)
+        {
+            if (selectedSoilType != null)
+            {
+                // Only change if different to avoid unnecessary dirtying
+                if (tile.currentSoilType != selectedSoilType)
+                {
+                    tile.currentSoilType = selectedSoilType;
+                    // Apply fertility impact of the new soil type when it's set
+                    tile.fertility = Mathf.Clamp(tile.fertility + selectedSoilType.fertilityModifier, 0f, 100f);
+                }
+            }
+            else // If no soil type selected in brush, set to null (or a default if desired)
+            {
+                if (tile.currentSoilType != null)
+                {
+                    tile.currentSoilType = null;
+                    // You might want to remove the fertility modifier if setting to null, or keep it.
+                    // For now, we'll assume setting to null means no specific soil type impact.
+                }
+            }
+        }
         EditorUtility.SetDirty(targetChunk); // Mark the chunk as dirty after modification
     }
 
     /// <summary>
     /// Applies the square brush in a square area around a center internal coordinate within a chunk.
     /// </summary>
-    private void ApplySquareBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int size) // Renamed from ApplyBrushToArea
+    private void ApplySquareBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int size)
     {
         if (targetChunk == null) return;
 
@@ -1174,7 +1323,7 @@ public class LandDataEditor : Editor
     /// <summary>
     /// Applies the circular brush in a circular area around a center internal coordinate within a chunk.
     /// </summary>
-    private void ApplyCircleBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int radius) // New CircleBrush apply method
+    private void ApplyCircleBrushToArea(LandDataChunk targetChunk, int internalCenterX, int internalCenterY, int radius)
     {
         if (targetChunk == null) return;
 
