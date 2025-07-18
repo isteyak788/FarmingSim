@@ -12,6 +12,9 @@ public class CropTileData
     public float growthProgress;
     public TileState state;
 
+    // NEW: Reference to the current SoilType of this tile
+    public SoilType currentSoilType;
+
     // Fertility Recovery Parameters
     public float recoveryRatePerSecond = 1.0f; // How much fertility recovers per second
     public float maxRecoveryFertility = 500f;   // The maximum fertility it can recover to
@@ -24,6 +27,7 @@ public class CropTileData
         growthProgress = 0f;
         recoveryRatePerSecond = 1.0f;
         maxRecoveryFertility = 500f;
+        currentSoilType = null; // Initialize to null, or a default SoilType if you have one
     }
 
     /// <summary>
@@ -58,7 +62,7 @@ public class CropTileData
             if (canGrowThisSeason)
             {
                 // Increase growth progress based on fertility and time
-                // FertilityFactor: 0 at 0 fertility, 1 at 500 fertility.
+                // FertilityFactor: 0 at 0 fertility, 500 at 500 fertility.
                 // This means at 0 fertility, growth is 0. At 500 fertility, growth is at max speed.
                 float fertilityGrowthFactor = fertility / maxRecoveryFertility; // Use maxRecoveryFertility as the normalizer
                 growthProgress += (deltaTime / currentCrop.timeToGrowInSeconds) * fertilityGrowthFactor;
@@ -85,6 +89,11 @@ public class CropTileData
                             {
                                 currentGrowthStage = i;
                                 break;
+                            }
+                            // If no stage is met, it stays at the first stage (index 0)
+                            if (i == 0 && growthProgress < currentCrop.growthStages[i].threshold)
+                            {
+                                currentGrowthStage = 0;
                             }
                         }
                         // Optional: if (currentGrowthStage != previousStage) Debug.Log("Crop stage changed!");
