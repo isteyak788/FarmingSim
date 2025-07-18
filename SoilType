@@ -1,0 +1,17 @@
+// Assets/Scripts/SoilType.cs
+using UnityEngine;
+
+[CreateAssetMenu(fileName = "NewSoilType", menuName = "Farming/Soil Type")]
+public class SoilType : ScriptableObject
+{
+    [Tooltip("The name of this soil type (e.g., 'Loamy', 'Clay', 'Sandy').")]
+    public string soilTypeName = "New Soil Type";
+
+    [Tooltip("The color to display for this soil type in the editor overlay.")]
+    public Color displayColor = Color.grey;
+
+    [Tooltip("The immediate impact this soil type has on a tile's fertility when applied. " +
+             "This is added to the tile's current fertility when the soil type is set.")]
+    [Range(-50f, 50f)] // Example range for fertility impact
+    public float fertilityModifier = 0f; // E.g., -10 for poor soil, +10 for rich soil
+}
