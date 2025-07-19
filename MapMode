@@ -1,0 +1,191 @@
+using UnityEngine;
+using System.Collections.Generic;
+using System; // Required for System.Action event delegate
+
+public class MapMode : MonoBehaviour
+{
+    [Tooltip("Reference to the LandData ScriptableObject.")]
+    public LandData landData;
+
+    [Tooltip("Material to use for visualizing the tiles. A transparent material is recommended.")]
+    public Material tileMaterial;
+
+    [Tooltip("Parent object for all generated fertility visualization tiles.")]
+    public Transform tileParent;
+
+    private Gradient fertilityColorGradient;
+    private Dictionary<Vector2Int, GameObject> currentTileVisuals = new Dictionary<Vector2Int, GameObject>();
+
+    void OnEnable()
+    {
+        if (landData == null)
+        {
+            Debug.LogError("MapMode: LandData reference is not set. Please assign it in the Inspector.");
+            enabled = false;
+            return;
+        }
+
+        // Initialize the gradient based on LandDataEditor's logic (Red to Green)
+        InitializeFertilityGradient();
+
+        // Generate visuals initially
+        GenerateFertilityVisuals();
+
+        // Subscribe to land data changes for dynamic updates
+        // Ensure LandData.NotifyLandDataChanged() is called whenever data that affects visualization changes
+        landData.OnLandDataChanged += OnLandDataChanged;
+    }
+
+    void OnDisable()
+    {
+        if (landData != null)
+        {
+            landData.OnLandDataChanged -= OnLandDataChanged;
+        }
+        ClearFertilityVisuals();
+    }
+
+    private void InitializeFertilityGradient()
+    {
+        fertilityColorGradient = new Gradient();
+        GradientColorKey[] colorKeys = new GradientColorKey[2];
+        colorKeys[0] = new GradientColorKey(Color.red, 0f);    // 0 fertility is red
+        colorKeys[1] = new GradientColorKey(Color.green, 1f);  // 100 fertility is green (normalized to 1.0)
+
+        GradientAlphaKey[] alphaKeys = new GradientAlphaKey[2];
+        alphaKeys[0] = new GradientAlphaKey(0.5f, 0f); // 50% opacity for low fertility
+        alphaKeys[1] = new GradientAlphaKey(0.5f, 1f); // 50% opacity for high fertility
+        fertilityColorGradient.SetKeys(colorKeys, alphaKeys);
+    }
+
+    private void OnLandDataChanged()
+    {
+        Debug.Log("Land data changed, regenerating fertility visuals.");
+        GenerateFertilityVisuals();
+    }
+
+    private void GenerateFertilityVisuals()
+    {
+        ClearFertilityVisuals(); // Clear existing visuals before generating new ones
+
+        if (tileMaterial == null)
+        {
+            Debug.LogError("MapMode: Tile Material is not assigned. Please assign a material in the Inspector.");
+            return;
+        }
+        if (tileParent == null)
+        {
+            // Create a parent object if none is assigned for cleaner hierarchy
+            GameObject parentGO = new GameObject("FertilityVisualsParent");
+            tileParent = parentGO.transform;
+            tileParent.SetParent(this.transform); // Make it a child of this GameObject
+        }
+
+        float tileSize = landData.GetDefaultInternalTileSize();
+        float halfTileSize = tileSize / 2f;
+        Vector2Int internalChunkSize = landData.GetDefaultInternalChunkSize(); // Get this once
+
+        // Iterate through all chunks and then all tiles within each chunk
+        for (int chunkX = 0; chunkX < landData.chunkGridSize.x; chunkX++)
+        {
+            for (int chunkY = 0; chunkY < landData.chunkGridSize.y; chunkY++)
+            {
+                LandDataChunk chunk = landData.GetChunk(chunkX, chunkY);
+                if (chunk == null) continue;
+
+                for (int internalX = 0; internalX < chunk.internalGridSize.x; internalX++)
+                {
+                    for (int internalY = 0; internalY < chunk.internalGridSize.y; internalY++)
+                    {
+                        // Calculate global tile coordinates directly using chunk and internal coords
+                        int globalX = (chunkX * internalChunkSize.x) + internalX;
+                        int globalY = (chunkY * internalChunkSize.y) + internalY;
+                        Vector2Int globalTileCoord = new Vector2Int(globalX, globalY);
+
+                        CropTileData tileData = chunk.GetTileData(internalX, internalY); // Get tile data from the chunk itself
+                                                                                        // LandData.GetTileData() doesn't exist.
+
+                        if (tileData != null)
+                        {
+                            Vector3 tileWorldPos = landData.GlobalTileCoordToWorld(globalTileCoord);
+
+                            // Create a new GameObject for the tile visualization
+                            GameObject tileVisualGO = new GameObject($"FertilityTile_{globalTileCoord.x}_{globalTileCoord.y}");
+                            tileVisualGO.transform.SetParent(tileParent);
+                            tileVisualGO.transform.position = tileWorldPos + Vector3.up * 0.01f; // Slightly raise it to avoid Z-fighting
+
+                            // Add MeshFilter and MeshRenderer
+                            MeshFilter meshFilter = tileVisualGO.AddComponent<MeshFilter>();
+                            MeshRenderer meshRenderer = tileVisualGO.AddComponent<MeshRenderer>();
+
+                            // Assign the material
+                            meshRenderer.material = new Material(tileMaterial); // Create a new instance so colors are unique
+
+                            // Create a simple quad mesh
+                            Mesh tileMesh = new Mesh();
+                            Vector3[] vertices = new Vector3[4];
+                            Vector2[] uv = new Vector2[4];
+                            int[] triangles = new int[6];
+
+                            // Vertices for a quad centered at (0,0,0) then scaled and positioned
+                            vertices[0] = new Vector3(-halfTileSize, 0, -halfTileSize);
+                            vertices[1] = new Vector3(halfTileSize, 0, -halfTileSize);
+                            vertices[2] = new Vector3(-halfTileSize, 0, halfTileSize);
+                            vertices[3] = new Vector3(halfTileSize, 0, halfTileSize);
+
+                            uv[0] = new Vector2(0, 0);
+                            uv[1] = new Vector2(1, 0);
+                            uv[2] = new Vector2(0, 1);
+                            uv[3] = new Vector2(1, 1);
+
+                            triangles[0] = 0;
+                            triangles[1] = 2;
+                            triangles[2] = 1;
+                            triangles[3] = 2;
+                            triangles[4] = 3;
+                            triangles[5] = 1;
+
+                            tileMesh.vertices = vertices;
+                            tileMesh.uv = uv;
+                            tileMesh.triangles = triangles;
+                            tileMesh.RecalculateNormals(); // Important for lighting
+
+                            meshFilter.mesh = tileMesh;
+
+                            // Apply fertility color
+                            float normalizedFertility = Mathf.Clamp01(tileData.fertility / 100f); // Assuming fertility max is 100
+                            meshRenderer.material.color = fertilityColorGradient.Evaluate(normalizedFertility);
+
+                            currentTileVisuals.Add(globalTileCoord, tileVisualGO);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void ClearFertilityVisuals()
+    {
+        foreach (var go in currentTileVisuals.Values)
+        {
+            if (go != null)
+            {
+                Destroy(go);
+            }
+        }
+        currentTileVisuals.Clear();
+
+        // Also destroy the parent object if it was created by this script
+        if (tileParent != null && tileParent.name == "FertilityVisualsParent" && tileParent.parent == this.transform)
+        {
+            Destroy(tileParent.gameObject);
+            tileParent = null;
+        }
+    }
+
+    // You can add a public method to manually refresh the visualization if needed
+    public void RefreshVisuals()
+    {
+        GenerateFertilityVisuals();
+    }
+}
