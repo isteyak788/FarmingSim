@@ -10,8 +10,16 @@ public class CropType : ScriptableObject
     public float timeToGrowInDays = 2f; // Total time from Sown to ReadyForHarvest (e.g., 2 game days for testing)
     public float fertilityImpact = 0f; // Initial impact when planted (e.g., -5 for heavy feeders)
 
+    [Header("Pre-Growth Stages")]
+    [Tooltip("3D models to display before any main growth stages begin.")]
+    public GameObject[] preGrowthModels; // Array for models before main growth
+
     [Header("Growth Stages")]
     public GrowthStage[] growthStages; // Array to hold different growth stages
+
+    [Header("Post-Growth Stages")]
+    [Tooltip("3D models to display after the final main growth stage, e.g., withered or harvested states.")]
+    public GameObject[] postGrowthModels; // Array for models after main growth
 
     [Header("Season Requirements")]
     public List<Season> growingSeasons; // List of seasons this crop can grow in. Empty list = grows all year.
