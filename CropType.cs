@@ -1,4 +1,4 @@
-// Assets/Scripts/CropType.cs (modify existing or create new)
+// Assets/Scripts/CropType.cs
 using UnityEngine;
 using System.Collections.Generic; // For List<Season>
 
@@ -6,7 +6,8 @@ using System.Collections.Generic; // For List<Season>
 public class CropType : ScriptableObject
 {
     public string cropName;
-    public float timeToGrowInSeconds = 120f; // Total time from Sown to ReadyForHarvest (e.g., 2 minutes for testing)
+    [Tooltip("Total time from Sown to ReadyForHarvest in game days.")]
+    public float timeToGrowInDays = 2f; // Total time from Sown to ReadyForHarvest (e.g., 2 game days for testing)
     public float fertilityImpact = 0f; // Initial impact when planted (e.g., -5 for heavy feeders)
 
     [Header("Growth Stages")]
@@ -23,6 +24,8 @@ public class GrowthStage
     [Tooltip("Progress threshold (0.0 to 1.0) when this stage begins.")]
     [Range(0f, 1f)]
     public float threshold;
+    [Tooltip("Minimum number of in-game days this stage must last.")]
+    public float minDaysForStage; // New field for minimum duration in days
     [Tooltip("3D model to display for this growth stage.")]
     public GameObject stageModel;
     // Add other properties like yield multiplier, visual effects, etc.
